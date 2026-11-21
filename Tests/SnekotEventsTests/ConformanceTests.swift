@@ -85,4 +85,17 @@ final class ConformanceTests: XCTestCase {
             XCTFail("unexpected \(error)")
         }
     }
+
+    func testAnExperimentPutsItsQuestionOnTheWire() {
+        let request = SnekotEvents.experimentRequest(name: "pricing", variants: ["control", "new"], userID: "user-1", ip: nil, userAgent: nil, project: "p")
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/v1/experiment")
+        XCTAssertEqual(request.body, .object(["project": .string("p"), "experiment": .string("pricing"), "variants": .array([.string("control"), .string("new")]), "user_id": .string("user-1")]))
+    }
+
+    func testADisabledExperimentIsItsFirstVariant() async throws {
+        let events = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, disabled: true)
+        let variant = try await events.experiment("pricing", variants: ["control", "new"])
+        XCTAssertEqual(variant, "control")
+    }
 }

@@ -8,6 +8,6 @@ let package = Package(
     targets: [
         .target(name: "SnekotEvents"),
         .executableTarget(name: "smoke", dependencies: ["SnekotEvents"]),
-        .testTarget(name: "SnekotEventsTests", dependencies: ["SnekotEvents"]),
+        .testTarget(name: "SnekotEventsTests", dependencies: ["SnekotEvents"], exclude: ["conformance.json"]),
     ]
 )

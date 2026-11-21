@@ -10,7 +10,7 @@ In Xcode, **File › Add Package Dependencies** and paste `https://github.com/sn
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/snekot-co/snekot-swift", from: "0.1.0"),
+    .package(url: "https://github.com/snekot-co/snekot-swift", from: "0.2.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [.product(name: "SnekotEvents", package: "snekot-swift")]),
@@ -30,6 +30,12 @@ try await events.group("acme", userID: "user-123", properties: ["name": "Acme"])
 try await events.subscribe("jane@example.com", name: "Jane Park")
 try await events.setInsight("MRR", to: "$1,289")
 try await events.incrementInsight("Orders")
+```
+
+`experiment` asks which variant of an [A/B test](https://snekot.co/docs/experiments) a person gets:
+
+```swift
+let variant = try await events.experiment("pricing-page", variants: ["control", "annual-first"], userID: "user-123")
 ```
 
 An app ships to other people's devices, so give it a **public** key (`pk_…`), which can only add events. See [Keys](https://snekot.co/docs/keys).

@@ -178,6 +178,21 @@ public struct SnekotEvents: Sendable {
         try await send(Self.incrementRequest(title: title, by: amount, icon: icon, project: project))
     }
 
+    /// Which variant of an A/B test a person gets. The same person always gets the same one.
+    /// When `disabled` is set it is the first variant and nothing is sent.
+    /// - Parameters:
+    ///   - variants: Two to eight names. The first is the one the others are measured against; keep the order the same everywhere.
+    ///   - userID: The person, when they are known. An app with a public key may leave it out: the device is then the visitor.
+    ///   - ip: From a server, for someone with no id: their address, which is not stored.
+    ///   - userAgent: Sent along with `ip`.
+    public func experiment(_ name: String, variants: [String], userID: String? = nil, ip: String? = nil, userAgent: String? = nil) async throws -> String {
+        let first = variants.first ?? ""
+        if disabled { return first }
+        let data = try await deliver(Self.experimentRequest(name: name, variants: variants, userID: userID, ip: ip, userAgent: userAgent, project: project))
+        if case .object(let fields)? = try? JSONDecoder().decode(JSON.self, from: data), case .string(let variant)? = fields["variant"] { return variant }
+        return first
+    }
+
     // The requests are built apart from sending them, so the conformance tests can check the wire format without a server.
 
     public static func request(for event: Track, project: String) -> WireRequest {
@@ -212,6 +227,14 @@ public struct SnekotEvents: Sendable {
         return WireRequest(method: "POST", path: "/v1/subscribe", body: .object(body))
     }
 
+    public static func experimentRequest(name: String, variants: [String], userID: String?, ip: String?, userAgent: String?, project: String) -> WireRequest {
+        var body: [String: JSON] = ["project": .string(project), "experiment": .string(name), "variants": .array(variants.map(JSON.string))]
+        if let userID { body["user_id"] = .string(userID) }
+        if let ip { body["ip"] = .string(ip) }
+        if let userAgent { body["user_agent"] = .string(userAgent) }
+        return WireRequest(method: "POST", path: "/v1/experiment", body: .object(body))
+    }
+
     public static func insightRequest(title: String, value: EventValue, icon: String?, project: String) -> WireRequest {
         var body: [String: JSON] = ["project": .string(project), "title": .string(title), "value": value.json]
         if let icon { body["icon"] = .string(icon) }
@@ -226,6 +249,11 @@ public struct SnekotEvents: Sendable {
 
     private func send(_ wire: WireRequest) async throws {
         if disabled { return }
+        _ = try await deliver(wire)
+    }
+
+    /// Sends one request, with one retry, and gives back the body the server answered with.
+    private func deliver(_ wire: WireRequest) async throws -> Data {
         var request = URLRequest(url: endpoint.appendingPathComponent(wire.path), timeoutInterval: timeout)
         request.httpMethod = wire.method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -239,7 +267,7 @@ public struct SnekotEvents: Sendable {
             do {
                 let (data, response) = try await session.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                if (200..<300).contains(status) { return }
+                if (200..<300).contains(status) { return data }
                 if status < 500 {
                     let message: String
                     if case .object(let fields)? = try? JSONDecoder().decode(JSON.self, from: data), case .string(let text)? = fields["error"] { message = text } else { message = "The server answered \(status)." }
