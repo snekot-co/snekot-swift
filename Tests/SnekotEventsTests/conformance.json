@@ -1,0 +1,32 @@
+{
+  "note": "What every SDK must put on the wire. `call` is the method, `args` its arguments, `expect` the request. Every body also carries the client's project. An SDK passes when each call produces exactly this method, path and body.",
+  "project": "acme-store",
+  "cases": [
+    { "call": "track", "args": { "channel": "payments", "event": "New subscription", "description": "jane upgraded", "icon": ":moneybag:", "notify": true, "user_id": "user-1", "tags": { "plan": "pro", "seats": 3, "trial": false }, "parser": "markdown" },
+      "expect": { "method": "POST", "path": "/v1/log", "body": { "project": "acme-store", "channel": "payments", "event": "New subscription", "description": "jane upgraded", "icon": ":moneybag:", "notify": true, "user_id": "user-1", "tags": { "plan": "pro", "seats": 3, "trial": false }, "parser": "markdown" } } },
+    { "call": "track", "args": { "channel": "signups", "event": "User signed up" },
+      "expect": { "method": "POST", "path": "/v1/log", "body": { "project": "acme-store", "channel": "signups", "event": "User signed up" } } },
+    { "call": "track", "args": { "channel": "signups", "event": "Backfilled", "timestamp": 1700000000 },
+      "expect": { "method": "POST", "path": "/v1/log", "body": { "project": "acme-store", "channel": "signups", "event": "Backfilled", "timestamp": 1700000000 } } },
+    { "call": "identify", "args": { "user_id": "user-1", "properties": { "name": "Jane", "plan": "pro" } },
+      "expect": { "method": "POST", "path": "/v1/identify", "body": { "project": "acme-store", "user_id": "user-1", "properties": { "name": "Jane", "plan": "pro" } } } },
+    { "call": "group", "args": { "user_id": "user-1", "group_id": "northwind", "properties": { "name": "Northwind" } },
+      "expect": { "method": "POST", "path": "/v1/group", "body": { "project": "acme-store", "user_id": "user-1", "group_id": "northwind", "properties": { "name": "Northwind" } } } },
+    { "call": "subscribe", "args": { "email": "jane@example.com", "name": "Jane", "properties": { "plan": "pro", "seats": 3 }, "source": "/blog/launch", "notify": true },
+      "expect": { "method": "POST", "path": "/v1/subscribe", "body": { "project": "acme-store", "email": "jane@example.com", "name": "Jane", "properties": { "plan": "pro", "seats": 3 }, "source": "/blog/launch", "notify": true } } },
+    { "call": "subscribe", "args": { "email": "jane@example.com" },
+      "expect": { "method": "POST", "path": "/v1/subscribe", "body": { "project": "acme-store", "email": "jane@example.com" } } },
+    { "call": "insight.track", "args": { "title": "MRR", "value": "$1,289", "icon": ":chart_with_upwards_trend:" },
+      "expect": { "method": "POST", "path": "/v1/insight", "body": { "project": "acme-store", "title": "MRR", "value": "$1,289", "icon": ":chart_with_upwards_trend:" } } },
+    { "call": "insight.increment", "args": { "title": "Orders", "value": 2 },
+      "expect": { "method": "PATCH", "path": "/v1/insight", "body": { "project": "acme-store", "title": "Orders", "value": { "$inc": 2 } } } }
+  ],
+  "behaviour": [
+    "Every request sends Content-Type: application/json and Authorization: Bearer <token>.",
+    "Fields left out are not sent; null is never sent.",
+    "A 4xx is never retried and surfaces the server's `error` sentence with the status.",
+    "A network failure or a 5xx is retried once, after 250 ms.",
+    "A request is abandoned after 10 seconds unless configured otherwise.",
+    "With tracking disabled no request is made and every call succeeds."
+  ]
+}
