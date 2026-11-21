@@ -135,7 +135,7 @@ final class ConformanceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("snekot-queue.json").path))
     }
 
-    func testWithAPublicKeyAKeptEventCarriesNoTime() async throws {
+    func testWithAPublicKeyAKeptEventCarriesItsTimeToo() async throws {
         let directory = folder()
         let offline = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, timeout: 2, queue: OfflineQueue(directory: directory))
         try await offline.track(channel: "a", event: "first")
@@ -143,7 +143,7 @@ final class ConformanceTests: XCTestCase {
         let online = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: OfflineQueue(directory: directory))
         await online.flush()
         XCTAssertEqual(Stub.events(), ["first"])
-        XCTAssertEqual(Stub.timestamps(), [false], "the server refuses a time from a public key")
+        XCTAssertEqual(Stub.timestamps(), [true], "a public key may set a time within the last 7 days")
     }
 
     func testARefusalIsThrownAndNeverKept() async throws {

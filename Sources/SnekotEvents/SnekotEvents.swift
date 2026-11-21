@@ -148,9 +148,8 @@ public struct SnekotEvents: Sendable {
     /// Posts an event to a channel.
     public func track(_ event: Track) async throws {
         // An event that has to wait is kept with the moment it happened, so it lands in the feed at the right time.
-        // A public key may not set a time, so with one the event lands when it is finally sent.
         var kept = event
-        if kept.timestamp == nil && !token.hasPrefix("pk_") { kept.timestamp = Date() }
+        if kept.timestamp == nil { kept.timestamp = Date() }
         try await send(Self.request(for: event, project: project), keeping: Self.request(for: kept, project: project))
     }
 
