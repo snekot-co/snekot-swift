@@ -129,11 +129,14 @@ public struct SnekotEvents: Sendable {
     private let session: URLSession
     private let timeout: TimeInterval
     private let disabled: Bool
+    private let queue: OfflineQueue?
 
     /// - Parameters:
     ///   - timeout: How long one attempt may take; 10 seconds by default.
     ///   - disabled: Makes every call succeed without sending anything, for previews and tests.
-    public init(token: String, project: String, endpoint: URL = SnekotEvents.defaultEndpoint, timeout: TimeInterval = 10, disabled: Bool = false, session: URLSession = .shared) {
+    ///   - queue: Keeps what could not be sent and sends it later. With one, a call that gets no answer no longer throws.
+    public init(token: String, project: String, endpoint: URL = SnekotEvents.defaultEndpoint, timeout: TimeInterval = 10, disabled: Bool = false, session: URLSession = .shared, queue: OfflineQueue? = nil) {
+        self.queue = queue
         self.token = token
         self.project = project
         self.endpoint = endpoint
@@ -143,7 +146,22 @@ public struct SnekotEvents: Sendable {
     }
 
     /// Posts an event to a channel.
-    public func track(_ event: Track) async throws { try await send(Self.request(for: event, project: project)) }
+    public func track(_ event: Track) async throws {
+        // An event that has to wait is kept with the moment it happened, so it lands in the feed at the right time.
+        // A public key may not set a time, so with one the event lands when it is finally sent.
+        var kept = event
+        if kept.timestamp == nil && !token.hasPrefix("pk_") { kept.timestamp = Date() }
+        try await send(Self.request(for: event, project: project), keeping: Self.request(for: kept, project: project))
+    }
+
+    /// Sends what the queue is holding. Call it when the app starts or comes back online; every other call does
+    /// it too, before sending its own. It answers with how many events are still waiting, and is 0 without a queue.
+    @discardableResult
+    public func flush() async -> Int {
+        guard let queue, !disabled else { return 0 }
+        _ = await queue.drain { _ = try await self.deliver($0) }
+        return await queue.count
+    }
 
     /// Posts an event to a channel.
     public func track(channel: String, event: String, description: String? = nil, userID: String? = nil, icon: String? = nil, notify: Bool? = nil, tags: [String: EventValue] = [:]) async throws {
@@ -247,9 +265,23 @@ public struct SnekotEvents: Sendable {
         return WireRequest(method: "PATCH", path: "/v1/insight", body: .object(body))
     }
 
-    private func send(_ wire: WireRequest) async throws {
+    private func send(_ wire: WireRequest, keeping kept: WireRequest? = nil) async throws {
         if disabled { return }
-        _ = try await deliver(wire)
+        guard let queue else {
+            _ = try await deliver(wire)
+            return
+        }
+        // What is already waiting goes first. If it cannot, this one waits behind it, so nothing arrives out of order.
+        guard await queue.drain({ _ = try await self.deliver($0) }) else {
+            await queue.add(kept ?? wire)
+            return
+        }
+        do {
+            _ = try await deliver(wire)
+        } catch let error as SnekotError {
+            if case .refused = error { throw error }
+            await queue.add(kept ?? wire)
+        }
     }
 
     /// Sends one request, with one retry, and gives back the body the server answered with.

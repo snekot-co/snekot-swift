@@ -98,4 +98,136 @@ final class ConformanceTests: XCTestCase {
         let variant = try await events.experiment("pricing", variants: ["control", "new"])
         XCTAssertEqual(variant, "control")
     }
+
+    // MARK: The offline queue
+
+    func folder() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("snekot-tests-" + UUID().uuidString) }
+    func stubbed() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [Stub.self]
+        return URLSession(configuration: configuration)
+    }
+
+    func testWhatCannotBeSentIsKeptAndSurvivesARestart() async throws {
+        let directory = folder()
+        let offline = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, timeout: 2, queue: OfflineQueue(directory: directory))
+        try await offline.track(channel: "a", event: "first")
+        try await offline.identify(userID: "u", properties: ["plan": "pro"])
+        let reopened = OfflineQueue(directory: directory)
+        let waiting = await reopened.count
+        XCTAssertEqual(waiting, 2)
+    }
+
+    func testWhatWasKeptGoesOutFirstAndInOrder() async throws {
+        let directory = folder()
+        let offline = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, timeout: 2, queue: OfflineQueue(directory: directory))
+        try await offline.track(channel: "a", event: "first")
+        try await offline.track(channel: "a", event: "second")
+
+        Stub.reset()
+        let queue = OfflineQueue(directory: directory)
+        let online = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: queue)
+        try await online.track(channel: "a", event: "third")
+        XCTAssertEqual(Stub.events(), ["first", "second", "third"])
+        XCTAssertEqual(Stub.timestamps(), [true, true, false], "a kept event carries the moment it happened; a live one does not")
+        let waiting = await queue.count
+        XCTAssertEqual(waiting, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("snekot-queue.json").path))
+    }
+
+    func testWithAPublicKeyAKeptEventCarriesNoTime() async throws {
+        let directory = folder()
+        let offline = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, timeout: 2, queue: OfflineQueue(directory: directory))
+        try await offline.track(channel: "a", event: "first")
+        Stub.reset()
+        let online = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: OfflineQueue(directory: directory))
+        await online.flush()
+        XCTAssertEqual(Stub.events(), ["first"])
+        XCTAssertEqual(Stub.timestamps(), [false], "the server refuses a time from a public key")
+    }
+
+    func testARefusalIsThrownAndNeverKept() async throws {
+        Stub.reset()
+        Stub.answer = 400
+        let queue = OfflineQueue(directory: folder())
+        let events = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: queue)
+        do {
+            try await events.track(channel: "Not Valid", event: "x")
+            XCTFail("expected a refusal")
+        } catch SnekotError.refused(let status, _) {
+            XCTAssertEqual(status, 400)
+        }
+        let waiting = await queue.count
+        XCTAssertEqual(waiting, 0)
+    }
+
+    func testAKeptEventTheServerRefusesIsDroppedAndTheRestGoOut() async throws {
+        let directory = folder()
+        let queue = OfflineQueue(directory: directory)
+        await queue.add(WireRequest(method: "POST", path: "/v1/log", body: .object(["event": .string("bad")])))
+        await queue.add(WireRequest(method: "POST", path: "/v1/log", body: .object(["event": .string("good")])))
+        Stub.reset()
+        Stub.refuse = "bad"
+        let events = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: queue)
+        let left = await events.flush()
+        XCTAssertEqual(left, 0)
+        XCTAssertEqual(Stub.events(), ["bad", "good"])
+    }
+
+    func testTooManyRequestsKeepsEverythingForLater() async {
+        let queue = OfflineQueue(directory: folder())
+        await queue.add(WireRequest(method: "POST", path: "/v1/log", body: .object(["event": .string("one")])))
+        await queue.add(WireRequest(method: "POST", path: "/v1/log", body: .object(["event": .string("two")])))
+        Stub.reset()
+        Stub.answer = 429
+        let events = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: queue)
+        let left = await events.flush()
+        XCTAssertEqual(left, 2)
+    }
+
+    func testTheQueueKeepsTheNewestAndDropsTheOld() async {
+        let queue = OfflineQueue(directory: folder(), limit: 2, maxAge: 60)
+        let wire = { (name: String) in WireRequest(method: "POST", path: "/v1/log", body: .object(["event": .string(name)])) }
+        await queue.add(wire("expired"), at: Date().addingTimeInterval(-120))
+        await queue.add(wire("one"))
+        await queue.add(wire("two"))
+        await queue.add(wire("three"))
+        Stub.reset()
+        let events = SnekotEvents(token: "pk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed(), queue: queue)
+        await events.flush()
+        XCTAssertEqual(Stub.events(), ["two", "three"])
+    }
+}
+
+/// Answers every request from memory and remembers what it was asked.
+final class Stub: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    private static var bodies: [[String: JSON]] = []
+    static var answer = 200
+    static var refuse: String?
+
+    static func reset() { lock.lock(); bodies = []; answer = 200; refuse = nil; lock.unlock() }
+    static func events() -> [String] { lock.lock(); defer { lock.unlock() }; return bodies.compactMap { if case .string(let name)? = $0["event"] { return name } else { return nil } } }
+    static func timestamps() -> [Bool] { lock.lock(); defer { lock.unlock() }; return bodies.map { $0["timestamp"] != nil } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        var data = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable { let read = stream.read(&buffer, maxLength: buffer.count); if read <= 0 { break }; data.append(buffer, count: read) }
+            stream.close()
+        }
+        var status = Stub.answer
+        if case .object(let fields)? = try? JSONDecoder().decode(JSON.self, from: data) {
+            Stub.lock.lock(); Stub.bodies.append(fields); Stub.lock.unlock()
+            if case .string(let name)? = fields["event"], name == Stub.refuse { status = 400 }
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("{\"error\":\"no\"}".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
 }
