@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.iOS(.v15), .macOS(.v12), .tvOS(.v15), .watchOS(.v8)],
     products: [.library(name: "SnekotEvents", targets: ["SnekotEvents"])],
     targets: [
-        .target(name: "SnekotEvents"),
+        .target(name: "SnekotEvents", resources: [.copy("PrivacyInfo.xcprivacy")]),
         .executableTarget(name: "smoke", dependencies: ["SnekotEvents"]),
         .testTarget(name: "SnekotEventsTests", dependencies: ["SnekotEvents"], exclude: ["conformance.json"]),
     ]

@@ -120,6 +120,9 @@ public struct WireRequest: Sendable, Equatable {
 }
 
 /// Posts events, identifies users and sets insights. Safe to share across tasks.
+///
+/// In an app, give it an `AppAnalytics` and it also names screens, remembers who is signed in, and posts installs,
+/// updates and opens by itself. Without one it sends exactly what each call says and nothing more.
 public struct SnekotEvents: Sendable {
     public static let defaultEndpoint = URL(string: "https://api.snekot.co")!
 
@@ -130,19 +133,24 @@ public struct SnekotEvents: Sendable {
     private let timeout: TimeInterval
     private let disabled: Bool
     private let queue: OfflineQueue?
+    private let app: AppAnalytics?
 
     /// - Parameters:
     ///   - timeout: How long one attempt may take; 10 seconds by default.
     ///   - disabled: Makes every call succeed without sending anything, for previews and tests.
     ///   - queue: Keeps what could not be sent and sends it later. With one, a call that gets no answer no longer throws.
-    public init(token: String, project: String, endpoint: URL = SnekotEvents.defaultEndpoint, timeout: TimeInterval = 10, disabled: Bool = false, session: URLSession = .shared, queue: OfflineQueue? = nil) {
+    ///   - app: The app side: a visitor id and the app's details on every event and screen, and installs, updates
+    ///     and opens posted by themselves. Create the client once when the app starts. Leave it out on a server.
+    public init(token: String, project: String, endpoint: URL = SnekotEvents.defaultEndpoint, timeout: TimeInterval = 10, disabled: Bool = false, session: URLSession = .shared, queue: OfflineQueue? = nil, app: AppAnalytics? = nil) {
         self.queue = queue
+        self.app = app
         self.token = token
         self.project = project
         self.endpoint = endpoint
         self.timeout = timeout
         self.disabled = disabled
         self.session = session
+        app?.start(self)
     }
 
     /// Posts an event to a channel.
@@ -150,7 +158,7 @@ public struct SnekotEvents: Sendable {
         // An event that has to wait is kept with the moment it happened, so it lands in the feed at the right time.
         var kept = event
         if kept.timestamp == nil { kept.timestamp = Date() }
-        try await send(Self.request(for: event, project: project), keeping: Self.request(for: kept, project: project))
+        try await send(prepared(Self.request(for: event, project: project)), keeping: prepared(Self.request(for: kept, project: project)))
     }
 
     /// Sends what the queue is holding. Call it when the app starts or comes back online; every other call does
@@ -168,9 +176,30 @@ public struct SnekotEvents: Sendable {
     }
 
     /// Sets properties on a user; keys sent again replace their old values.
+    /// In an app, this is also who later events and screens are from, until `reset()`.
     public func identify(userID: String, properties: [String: EventValue]) async throws {
-        try await send(Self.identifyRequest(userID: userID, properties: properties, project: project))
+        app?.remember(user: userID)
+        try await send(prepared(Self.identifyRequest(userID: userID, properties: properties, project: project)))
     }
+
+    /// Says which screen the person is looking at.
+    /// - Parameters:
+    ///   - name: The screen's name, such as `Checkout`. The same screen should always have the same name.
+    ///   - title: What the screen shows, when that says more than its name, such as a product's name.
+    public func screen(_ name: String, title: String? = nil) async throws {
+        try await send(prepared(Self.screenRequest(name: name, title: title, userID: nil, project: project)))
+    }
+
+    /// Forgets the current user and makes a new visitor id, for when someone signs out. Does nothing without `app`.
+    public func reset() {
+        app?.reset()
+    }
+
+    /// The random id this install of the app is known by; nil without `app`.
+    public var visitorID: String? { app?.visitorID }
+
+    /// The user from the last `identify`; nil without `app`, and after `reset()`.
+    public var userID: String? { app?.userID }
 
     /// Describes a group such as a company, and puts `userID` in it when given.
     public func group(_ groupID: String, userID: String? = nil, properties: [String: EventValue] = [:]) async throws {
@@ -228,6 +257,15 @@ public struct SnekotEvents: Sendable {
         WireRequest(method: "POST", path: "/v1/identify", body: .object(["project": .string(project), "user_id": .string(userID), "properties": .object(properties.mapValues(\.json))]))
     }
 
+    public static func screenRequest(name: String, title: String?, userID: String?, project: String) -> WireRequest {
+        var body: [String: JSON] = ["project": .string(project)]
+        if let userID { body["user_id"] = .string(userID) }
+        var payload: [String: JSON] = ["path": .string(name)]
+        if let title { payload["title"] = .string(title) }
+        body["payload"] = .object(payload)
+        return WireRequest(method: "POST", path: "/v1/page", body: .object(body))
+    }
+
     public static func groupRequest(groupID: String, userID: String?, properties: [String: EventValue], project: String) -> WireRequest {
         var body: [String: JSON] = ["project": .string(project), "group_id": .string(groupID)]
         if let userID { body["user_id"] = .string(userID) }
@@ -262,6 +300,27 @@ public struct SnekotEvents: Sendable {
         var body: [String: JSON] = ["project": .string(project), "title": .string(title), "value": .object(["$inc": amount.json])]
         if let icon { body["icon"] = .string(icon) }
         return WireRequest(method: "PATCH", path: "/v1/insight", body: .object(body))
+    }
+
+    /// A request with what the app side adds to it; the request itself when there is no app side.
+    func prepared(_ wire: WireRequest) -> WireRequest {
+        app?.adding(to: wire) ?? wire
+    }
+
+    // The automatic events. One that cannot be sent has nobody to tell, so it is dropped, or kept if there is a queue.
+
+    /// A cold start: an install or an update when it is one, and an open.
+    func launch() async {
+        for event in app?.launched() ?? [] { try? await track(event) }
+    }
+
+    func resignedActive() {
+        app?.resignedActive()
+    }
+
+    /// The app is in front again, which is an open if it was away long enough.
+    func becameActive() async {
+        for event in app?.becameActive() ?? [] { try? await track(event) }
     }
 
     private func send(_ wire: WireRequest, keeping kept: WireRequest? = nil) async throws {
