@@ -10,7 +10,7 @@ In Xcode, **File › Add Package Dependencies** and paste `https://github.com/sn
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/snekot-co/snekot-swift", from: "0.4.0"),
+    .package(url: "https://github.com/snekot-co/snekot-swift", from: "0.5.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [.product(name: "SnekotEvents", package: "snekot-swift")]),
@@ -27,7 +27,7 @@ let events = SnekotEvents(token: token, project: "acme-store")
 try await events.track(channel: "payments", event: "New subscription", icon: "💰", notify: true, tags: ["plan": "pro"])
 try await events.identify(userID: "user-123", properties: ["plan": "pro"])
 try await events.group("acme", userID: "user-123", properties: ["name": "Acme"])
-try await events.subscribe("jane@example.com", name: "Jane Park")
+try await events.subscribe("jane@example.com", name: "Jane Park", language: "sv-SE", timezone: "Europe/Stockholm")
 try await events.setInsight("MRR", to: "$1,289")
 try await events.incrementInsight("Orders")
 ```

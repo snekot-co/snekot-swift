@@ -52,7 +52,7 @@ final class ConformanceTests: XCTestCase {
             case "subscribe":
                 var notify: Bool?
                 if case .bool(let flag)? = args["notify"] { notify = flag }
-                request = SnekotEvents.subscribeRequest(email: text(args["email"])!, name: text(args["name"]), properties: values(args["properties"]), source: text(args["source"]), notify: notify, project: suite.project)
+                request = SnekotEvents.subscribeRequest(email: text(args["email"])!, name: text(args["name"]), properties: values(args["properties"]), source: text(args["source"]), notify: notify, language: text(args["language"]), timezone: text(args["timezone"]), project: suite.project)
             case "insight.track":
                 request = SnekotEvents.insightRequest(title: text(args["title"])!, value: value(args["value"]!), icon: text(args["icon"]), project: suite.project)
             case "insight.increment":

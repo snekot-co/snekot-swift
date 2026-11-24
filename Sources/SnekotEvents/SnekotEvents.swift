@@ -210,8 +210,10 @@ public struct SnekotEvents: Sendable {
     /// - Parameters:
     ///   - source: The page or screen the signup came from, such as `/blog/launch`.
     ///   - notify: Push the signup to the phones of everyone on the project.
-    public func subscribe(_ email: String, name: String? = nil, properties: [String: EventValue] = [:], source: String? = nil, notify: Bool? = nil) async throws {
-        try await send(Self.subscribeRequest(email: email, name: name, properties: properties, source: source, notify: notify, project: project))
+    ///   - language: The person's language, as a tag such as `sv` or `sv-SE`.
+    ///   - timezone: The person's time zone, as its IANA name, such as `Europe/Stockholm`.
+    public func subscribe(_ email: String, name: String? = nil, properties: [String: EventValue] = [:], source: String? = nil, notify: Bool? = nil, language: String? = nil, timezone: String? = nil) async throws {
+        try await send(Self.subscribeRequest(email: email, name: name, properties: properties, source: source, notify: notify, language: language, timezone: timezone, project: project))
     }
 
     /// Sets an insight to a value.
@@ -273,12 +275,14 @@ public struct SnekotEvents: Sendable {
         return WireRequest(method: "POST", path: "/v1/group", body: .object(body))
     }
 
-    public static func subscribeRequest(email: String, name: String?, properties: [String: EventValue], source: String?, notify: Bool?, project: String) -> WireRequest {
+    public static func subscribeRequest(email: String, name: String?, properties: [String: EventValue], source: String?, notify: Bool?, language: String? = nil, timezone: String? = nil, project: String) -> WireRequest {
         var body: [String: JSON] = ["project": .string(project), "email": .string(email)]
         if let name { body["name"] = .string(name) }
         if !properties.isEmpty { body["properties"] = .object(properties.mapValues(\.json)) }
         if let source { body["source"] = .string(source) }
         if let notify { body["notify"] = .bool(notify) }
+        if let language { body["language"] = .string(language) }
+        if let timezone { body["timezone"] = .string(timezone) }
         return WireRequest(method: "POST", path: "/v1/subscribe", body: .object(body))
     }
 
