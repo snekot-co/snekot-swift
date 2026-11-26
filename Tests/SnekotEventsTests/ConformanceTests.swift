@@ -99,6 +99,21 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(variant, "control")
     }
 
+    func testAFlagPutsItsQuestionOnTheWire() {
+        let request = SnekotEvents.flagRequest(key: "new-checkout", userID: "user-1", ip: nil, userAgent: nil, project: "p")
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/v1/flag")
+        XCTAssertEqual(request.body, .object(["project": .string("p"), "flag": .string("new-checkout"), "user_id": .string("user-1")]))
+        let anonymous = SnekotEvents.flagRequest(key: "new-checkout", userID: nil, ip: "203.0.113.7", userAgent: "Mozilla/5.0", project: "p")
+        XCTAssertEqual(anonymous.body, .object(["project": .string("p"), "flag": .string("new-checkout"), "ip": .string("203.0.113.7"), "user_agent": .string("Mozilla/5.0")]))
+    }
+
+    func testADisabledFlagIsOff() async throws {
+        let events = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, disabled: true)
+        let on = try await events.flag("new-checkout")
+        XCTAssertFalse(on)
+    }
+
     // MARK: The offline queue
 
     func folder() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("snekot-tests-" + UUID().uuidString) }
@@ -185,6 +200,45 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(left, 2)
     }
 
+    // MARK: A flag's answer
+
+    func testAFlagAnswersWithWhatTheServerSays() async throws {
+        Stub.reset()
+        let events = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed())
+        Stub.body = #"{"flag":"new-checkout","on":true}"#
+        let on = try await events.flag("new-checkout", userID: "user-1")
+        XCTAssertTrue(on)
+        XCTAssertEqual(Stub.asked(), [["project": .string("p"), "flag": .string("new-checkout"), "user_id": .string("user-1")]])
+        Stub.body = #"{"flag":"new-checkout","on":false}"#
+        let off = try await events.flag("new-checkout", userID: "user-1")
+        XCTAssertFalse(off)
+    }
+
+    func testAFlagTheServerRefusesThrows() async throws {
+        Stub.reset()
+        Stub.answer = 403
+        let events = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://stub.test")!, session: stubbed())
+        do {
+            _ = try await events.flag("new-checkout")
+            XCTFail("expected a refusal")
+        } catch SnekotError.refused(let status, let message) {
+            XCTAssertEqual(status, 403)
+            XCTAssertEqual(message, "no")
+        }
+    }
+
+    func testAFlagThatGetsNoAnswerThrows() async {
+        let events = SnekotEvents(token: "sk_test", project: "p", endpoint: URL(string: "http://127.0.0.1:1")!, timeout: 2)
+        do {
+            _ = try await events.flag("new-checkout")
+            XCTFail("expected a failure")
+        } catch let error as SnekotError {
+            guard case .unreachable = error else { return XCTFail("expected unreachable, got \(error)") }
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
     func testTheQueueKeepsTheNewestAndDropsTheOld() async {
         let queue = OfflineQueue(directory: folder(), limit: 2, maxAge: 60)
         let wire = { (name: String) in WireRequest(method: "POST", path: "/v1/log", body: .object(["event": .string(name)])) }
@@ -205,8 +259,10 @@ final class Stub: URLProtocol, @unchecked Sendable {
     private static var bodies: [[String: JSON]] = []
     static var answer = 200
     static var refuse: String?
+    static var body = "{\"error\":\"no\"}"
 
-    static func reset() { lock.lock(); bodies = []; answer = 200; refuse = nil; lock.unlock() }
+    static func reset() { lock.lock(); bodies = []; answer = 200; refuse = nil; body = "{\"error\":\"no\"}"; lock.unlock() }
+    static func asked() -> [[String: JSON]] { lock.lock(); defer { lock.unlock() }; return bodies }
     static func events() -> [String] { lock.lock(); defer { lock.unlock() }; return bodies.compactMap { if case .string(let name)? = $0["event"] { return name } else { return nil } } }
     static func timestamps() -> [Bool] { lock.lock(); defer { lock.unlock() }; return bodies.map { $0["timestamp"] != nil } }
 
@@ -227,7 +283,7 @@ final class Stub: URLProtocol, @unchecked Sendable {
             if case .string(let name)? = fields["event"], name == Stub.refuse { status = 400 }
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data("{\"error\":\"no\"}".utf8))
+        client?.urlProtocol(self, didLoad: Data(Stub.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
 }

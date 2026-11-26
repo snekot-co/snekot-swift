@@ -241,6 +241,20 @@ public struct SnekotEvents: Sendable {
         return first
     }
 
+    /// Whether a feature flag is on for a person. A key that has no flag is off.
+    /// When `disabled` is set it is off and nothing is sent.
+    /// - Parameters:
+    ///   - key: The flag's key, as the Snekot app shows it.
+    ///   - userID: The person, when they are known. An app with a public key may leave it out: the device is then the visitor.
+    ///   - ip: From a server, for someone with no id: their address, which is not stored.
+    ///   - userAgent: Sent along with `ip`.
+    public func flag(_ key: String, userID: String? = nil, ip: String? = nil, userAgent: String? = nil) async throws -> Bool {
+        if disabled { return false }
+        let data = try await deliver(Self.flagRequest(key: key, userID: userID, ip: ip, userAgent: userAgent, project: project))
+        if case .object(let fields)? = try? JSONDecoder().decode(JSON.self, from: data), case .bool(let on)? = fields["on"] { return on }
+        return false
+    }
+
     // The requests are built apart from sending them, so the conformance tests can check the wire format without a server.
 
     public static func request(for event: Track, project: String) -> WireRequest {
@@ -292,6 +306,14 @@ public struct SnekotEvents: Sendable {
         if let ip { body["ip"] = .string(ip) }
         if let userAgent { body["user_agent"] = .string(userAgent) }
         return WireRequest(method: "POST", path: "/v1/experiment", body: .object(body))
+    }
+
+    public static func flagRequest(key: String, userID: String?, ip: String?, userAgent: String?, project: String) -> WireRequest {
+        var body: [String: JSON] = ["project": .string(project), "flag": .string(key)]
+        if let userID { body["user_id"] = .string(userID) }
+        if let ip { body["ip"] = .string(ip) }
+        if let userAgent { body["user_agent"] = .string(userAgent) }
+        return WireRequest(method: "POST", path: "/v1/flag", body: .object(body))
     }
 
     public static func insightRequest(title: String, value: EventValue, icon: String?, project: String) -> WireRequest {

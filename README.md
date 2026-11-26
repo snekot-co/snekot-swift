@@ -38,6 +38,14 @@ try await events.incrementInsight("Orders")
 let variant = try await events.experiment("pricing-page", variants: ["control", "annual-first"], userID: "user-123")
 ```
 
+`flag` asks whether a feature flag is on for a person:
+
+```swift
+let on = try await events.flag("new-checkout", userID: "user-123")
+```
+
+A key that has no flag answers `false`. When the answer cannot be had, the call throws, as every call does; treat that as off.
+
 An app ships to other people's devices, so give it a **public** key (`pk_…`), which can only add events. See [Keys](https://snekot.co/docs/keys).
 
 ### Offline
