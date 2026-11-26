@@ -10,7 +10,7 @@ In Xcode, **File › Add Package Dependencies** and paste `https://github.com/sn
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/snekot-co/snekot-swift", from: "0.5.0"),
+    .package(url: "https://github.com/snekot-co/snekot-swift", from: "0.6.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [.product(name: "SnekotEvents", package: "snekot-swift")]),
@@ -38,7 +38,7 @@ try await events.incrementInsight("Orders")
 let variant = try await events.experiment("pricing-page", variants: ["control", "annual-first"], userID: "user-123")
 ```
 
-`flag` asks whether a feature flag is on for a person:
+`flag` asks whether a [feature flag](https://snekot.co/docs/flags) is on for a person:
 
 ```swift
 let on = try await events.flag("new-checkout", userID: "user-123")
